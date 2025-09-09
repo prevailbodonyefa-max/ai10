@@ -3,11 +3,12 @@ import openai
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 
 # Page configuration
 st.set_page_config(
-    page_title="My AI Assistant",
+    page_title="Nexus AI Assistant",
     page_icon="🤖",
     layout="centered",
     initial_sidebar_state="collapsed"
@@ -112,6 +113,9 @@ def apply_custom_theme():
 
 apply_custom_theme()
 
+# AI Assistant name
+AI_NAME = "Nexus"
+
 # User management functions
 USER_DATA_PATH = Path("user_data.json")
 
@@ -183,10 +187,120 @@ def logout():
     st.session_state.username = None
     st.session_state.messages = []
 
+# Enhanced OpenAI client initialization with better error handling
+def initialize_openai_client():
+    """
+    Initialize OpenAI client with API key from Streamlit secrets with robust error handling.
+    Returns client object or None if initialization fails.
+    """
+    try:
+        # Check if secrets are available
+        if not hasattr(st, 'secrets'):
+            st.error("Secrets management is not available in this environment.")
+            return None
+        
+        # Try to get API key from Streamlit secrets with multiple access methods
+        api_key = None
+        
+        # Method 1: Direct key access
+        if 'OPENAI_API_KEY' in st.secrets:
+            api_key = st.secrets['OPENAI_API_KEY']
+        # Method 2: Nested key access
+        elif 'openai' in st.secrets and 'api_key' in st.secrets.openai:
+            api_key = st.secrets.openai.api_key
+        # Method 3: Environment variable fallback
+        elif 'OPENAI_API_KEY' in os.environ:
+            api_key = os.environ['OPENAI_API_KEY']
+            st.info("Using OpenAI API key from environment variable.")
+        else:
+            st.error("""
+            OpenAI API key not found. Please configure it in one of these ways:
+            
+            1. **Streamlit Community Cloud**: Add to your app's secrets in the dashboard
+            2. **Local development**: Create a `.streamlit/secrets.toml` file with:
+               ```
+               OPENAI_API_KEY = "your-openai-api-key-here"
+               ```
+            3. **Environment variable**: Set OPENAI_API_KEY in your environment
+            """)
+            return None
+        
+        if not api_key or api_key.strip() == "":
+            st.error("OpenAI API key is empty. Please provide a valid key.")
+            return None
+        
+        # Initialize OpenAI client
+        client = openai.OpenAI(api_key=api_key)
+        
+        # Test the connection with a simple request
+        try:
+            client.models.list()
+        except Exception as test_error:
+            st.error(f"API key test failed: {str(test_error)}")
+            return None
+        
+        return client
+        
+    except Exception as e:
+        st.error(f"Error initializing OpenAI client: {str(e)}")
+        return None
+
+# Function to get AI response with enhanced error handling
+def get_ai_response(client, messages, model="gpt-3.5-turbo"):
+    """
+    Get response from OpenAI API with comprehensive error handling.
+    
+    Args:
+        client: Initialized OpenAI client
+        messages: List of message dictionaries
+        model: OpenAI model to use
+    
+    Returns:
+        Response content as string or None if error occurs
+    """
+    try:
+        # Show typing indicator
+        with st.status("Thinking...", expanded=False) as status:
+            # Create chat completion
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=1000,
+                temperature=0.7
+            )
+            status.update(label="Response ready", state="complete")
+        
+        return response.choices[0].message.content
+        
+    except openai.AuthenticationError:
+        st.error("""
+        Authentication error: Invalid API key. 
+        Please check your API key configuration in Streamlit Community Cloud secrets.
+        """)
+        return None
+    except openai.RateLimitError:
+        st.error("""
+        Rate limit exceeded. Please try again later.
+        You might have reached your OpenAI API quota or the rate limit for your account.
+        """)
+        return None
+    except openai.APIConnectionError:
+        st.error("""
+        Network connection error. Please check your internet connection.
+        If this persists, check OpenAI's status page for any ongoing issues.
+        """)
+        return None
+    except openai.APIError as e:
+        st.error(f"OpenAI API error: {str(e)}")
+        return None
+    except Exception as e:
+        st.error(f"Unexpected error: {str(e)}")
+        return None
+
 # Login/Registration UI
 def show_auth_ui():
     """Show authentication UI (login or register)"""
-    st.title("My AI Assistant")
+    st.title(f"My {AI_NAME} AI Assistant")
     
     # Toggle between login and register
     if st.session_state.register:
@@ -222,11 +336,15 @@ def show_auth_ui():
                 if password != confirm_password:
                     st.markdown('<div class="error">Passwords do not match</div>', unsafe_allow_html=True)
                     return
+                if len(password) < 6:
+                    st.markdown('<div class="error">Password must be at least 6 characters</div>', unsafe_allow_html=True)
+                    return
                 
                 success, message = register_user(username, password)
                 if success:
                     st.markdown(f'<div class="success">{message}</div>', unsafe_allow_html=True)
                     st.session_state.register = False
+                    time.sleep(1)  # Brief delay for user to read success message
                     st.rerun()
                 else:
                     st.markdown(f'<div class="error">{message}</div>', unsafe_allow_html=True)
@@ -239,77 +357,13 @@ def show_auth_ui():
                 else:
                     st.markdown(f'<div class="error">{message}</div>', unsafe_allow_html=True)
 
-# Initialize OpenAI client with error handling
-def initialize_openai_client():
-    """
-    Initialize OpenAI client with API key from st.secrets or environment variables.
-    Returns client object or None if initialization fails.
-    """
-    try:
-        # Try to get API key from Streamlit secrets
-        if 'OPENAI_API_KEY' in st.secrets:
-            api_key = st.secrets['OPENAI_API_KEY']
-        # Fallback to environment variable
-        elif 'OPENAI_API_KEY' in os.environ:
-            api_key = os.environ['OPENAI_API_KEY']
-        else:
-            st.error("OpenAI API key not found. Please configure it in secrets.toml or environment variables.")
-            return None
-        
-        # Initialize OpenAI client
-        client = openai.OpenAI(api_key=api_key)
-        return client
-        
-    except Exception as e:
-        st.error(f"Error initializing OpenAI client: {str(e)}")
-        return None
-
-# Function to get AI response with error handling
-def get_ai_response(client, messages, model="gpt-3.5-turbo"):
-    """
-    Get response from OpenAI API with comprehensive error handling.
-    
-    Args:
-        client: Initialized OpenAI client
-        messages: List of message dictionaries
-        model: OpenAI model to use
-    
-    Returns:
-        Response content as string or None if error occurs
-    """
-    try:
-        # Create chat completion
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=1000,
-            temperature=0.7
-        )
-        return response.choices[0].message.content
-        
-    except openai.AuthenticationError:
-        st.error("Authentication error: Invalid API key. Please check your API key configuration.")
-        return None
-    except openai.RateLimitError:
-        st.error("Rate limit exceeded. Please try again later.")
-        return None
-    except openai.APIConnectionError:
-        st.error("Network connection error. Please check your internet connection.")
-        return None
-    except openai.APIError as e:
-        st.error(f"OpenAI API error: {str(e)}")
-        return None
-    except Exception as e:
-        st.error(f"Unexpected error: {str(e)}")
-        return None
-
 # Main AI assistant UI
 def show_assistant_ui():
     """Show the AI assistant interface"""
     # Header with logout button
     col1, col2 = st.columns([4, 1])
     with col1:
-        st.title("My AI Assistant")
+        st.title(f"My {AI_NAME} AI Assistant")
         st.caption(f"Welcome, {st.session_state.username}!")
     with col2:
         if st.button("Logout", use_container_width=True):
@@ -321,11 +375,44 @@ def show_assistant_ui():
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
     
-    # Initialize OpenAI client
+    # Initialize OpenAI client with enhanced error handling
     client = initialize_openai_client()
     
-    # Chat input
-    if prompt := st.chat_input("What would you like to know?"):
+    # Show warning if client couldn't be initialized
+    if client is None:
+        st.warning("""
+        The AI assistant functionality is currently unavailable due to missing or invalid API configuration.
+        Please check your secrets configuration and try again.
+        """)
+        
+        with st.expander("Secrets Configuration Help"):
+            st.markdown("""
+            ### Setting Up Secrets on Streamlit Community Cloud
+            
+            1. Go to your app's dashboard on [Streamlit Community Cloud](https://share.streamlit.io/)
+            2. Click on **⋮** (three dots) next to your app
+            3. Select **Settings** → **Secrets**
+            4. Add your OpenAI API key in the following format:
+            
+            ```toml
+            OPENAI_API_KEY = "your-openai-api-key-here"
+            ```
+            
+            5. Click **Save** to update your secrets
+            
+            ### Local Development Setup
+            
+            For local development, create a file `.streamlit/secrets.toml` with:
+            
+            ```toml
+            OPENAI_API_KEY = "your-openai-api-key-here"
+            ```
+            
+            **Important**: Add `.streamlit/secrets.toml` to your `.gitignore` file to prevent accidentally committing secrets to version control.
+            """)
+    
+    # Chat input (only show if client is available)
+    if client and (prompt := st.chat_input("What would you like to know?")):
         # Display user message
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -333,30 +420,26 @@ def show_assistant_ui():
         # Add user message to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
         
-        # Only proceed if client was initialized successfully
-        if client:
-            # Display assistant response
-            with st.chat_message("assistant"):
-                message_placeholder = st.empty()
-                message_placeholder.markdown("Thinking...")
+        # Display assistant response
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            message_placeholder.markdown("Thinking...")
+            
+            # Get AI response
+            full_response = get_ai_response(client, st.session_state.messages)
+            
+            if full_response:
+                # Clear "Thinking..." message
+                message_placeholder.empty()
                 
-                # Get AI response
-                full_response = get_ai_response(client, st.session_state.messages)
+                # Display response
+                st.markdown(full_response)
                 
-                if full_response:
-                    # Clear "Thinking..." message
-                    message_placeholder.empty()
-                    
-                    # Display response
-                    st.markdown(full_response)
-                    
-                    # Add assistant response to chat history
-                    st.session_state.messages.append({"role": "assistant", "content": full_response})
-                else:
-                    message_placeholder.empty()
-                    st.error("Failed to get response from AI assistant. Please try again.")
-        else:
-            st.error("OpenAI client not initialized. Please check your API key configuration.")
+                # Add assistant response to chat history
+                st.session_state.messages.append({"role": "assistant", "content": full_response})
+            else:
+                message_placeholder.empty()
+                st.error("Failed to get response from AI assistant. Please try again.")
     
     # Clear chat history button
     if st.button("Clear Chat History"):
@@ -371,5 +454,4 @@ def main():
         show_auth_ui()
 
 if __name__ == "__main__":
-    import time
     main()
