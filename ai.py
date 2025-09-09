@@ -1,202 +1,181 @@
+# app.py
 import streamlit as st
 import openai
-import os
-import time
-from typing import List, Dict
+import hashlib
 
-# Page configuration
-st.set_page_config(
-    page_title="My AI Assistant",
-    page_icon="🤖",
-    layout="centered",
-    initial_sidebar_state="collapsed"
-)
+# ---------------------------
+# Page Config
+# ---------------------------
+st.set_page_config(page_title="My AI Assistant", page_icon="🤖", layout="wide")
 
-# Application title and description
-st.title("My AI Assistant")
-st.caption("Powered by OpenAI GPT API")
+# ---------------------------
+# Utility Functions
+# ---------------------------
+def make_hash(password: str) -> str:
+    """Hash password with SHA-256."""
+    return hashlib.sha256(password.encode()).hexdigest()
 
-# Custom CSS for purple and black theme
-def apply_custom_theme():
-    st.markdown("""
+def check_password(username: str, password: str) -> bool:
+    """Check login credentials against secrets.toml."""
+    if "users" in st.secrets and username in st.secrets["users"]:
+        stored_pw_hash = st.secrets["users"][username]
+        return make_hash(password) == stored_pw_hash
+    return False
+
+def signup_user(username: str, password: str):
+    """Show hashed password for adding to secrets.toml."""
+    st.info(f"👉 Add this to your secrets.toml:\n\n[users]\n{username} = \"{make_hash(password)}\"")
+
+def generate_ai_response(messages):
+    """Call OpenAI API and return assistant reply."""
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500
+        )
+        return response.choices[0].message["content"].strip()
+    except Exception as e:
+        st.error(f"⚠️ API Error: {e}")
+        return None
+
+def render_chat():
+    """Render the chat history."""
+    for msg in st.session_state.messages:
+        role = msg["role"]
+        content = msg["content"]
+        bubble_class = "user-bubble" if role == "user" else "ai-bubble"
+        st.markdown(
+            f"<div class='chat-bubble {bubble_class}'>{content}</div>",
+            unsafe_allow_html=True
+        )
+
+# ---------------------------
+# CSS Styling
+# ---------------------------
+st.markdown("""
     <style>
-    /* Main background */
-    .stApp {
-        background-color: #0E1117;
-        color: #FFFFFF;
+    body {
+        background-color: #0D0D0D;
+        color: #E6E6FA;
     }
-    
-    /* Chat message containers */
-    .stChatMessage {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
+    .chat-bubble {
+        padding: 0.6rem 1rem;
+        border-radius: 12px;
+        margin-bottom: 0.6rem;
+        font-size: 1rem;
+        max-width: 80%;
+        word-wrap: break-word;
     }
-    
-    /* User message styling */
-    div[data-testid="stChatMessage"][aria-label="user"] {
-        background-color: #4A1E6A;
+    .user-bubble {
+        background-color: #5A189A;
         color: white;
-        border: 1px solid #6B2E91;
+        text-align: right;
+        margin-left: auto;
     }
-    
-    /* Assistant message styling */
-    div[data-testid="stChatMessage"][aria-label="assistant"] {
-        background-color: #1E1E2E;
-        color: white;
-        border: 1px solid #39394A;
+    .ai-bubble {
+        background-color: #240046;
+        color: #E0AAFF;
+        text-align: left;
+        margin-right: auto;
     }
-    
-    /* Chat input container */
-    .stChatInput {
-        background-color: #1E1E2E;
-        border: 1px solid #6B2E91;
-    }
-    
-    /* Button styling */
     .stButton>button {
-        background-color: #6B2E91;
+        background-color: #7B2CBF;
         color: white;
+        border-radius: 10px;
         border: none;
+        padding: 0.5rem 1rem;
+        font-weight: bold;
+        transition: background-color 0.3s ease;
     }
-    
-    /* Button hover effect */
     .stButton>button:hover {
-        background-color: #8B48B1;
-        color: white;
-    }
-    
-    /* Header text color */
-    h1, h2, h3, h4, h5, h6 {
-        color: #B19CD9 !important;
-    }
-    
-    /* General text color */
-    .stMarkdown, .stCaption {
-        color: #E6E6FA !important;
+        background-color: #9D4EDD;
+        color: #fff;
     }
     </style>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-apply_custom_theme()
+# ---------------------------
+# Authentication
+# ---------------------------
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
 
-# Initialize session state for chat history
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+auth_mode = st.sidebar.radio("🔐 Authentication", ["Login", "Sign Up"])
 
-# Display chat history
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+if not st.session_state.authenticated:
+    st.title("🔐 Welcome to My AI Assistant")
 
-# Function to initialize OpenAI client with error handling
-def initialize_openai_client():
-    """
-    Initialize OpenAI client with API key from st.secrets or environment variables.
-    Returns client object or None if initialization fails.
-    """
+    if auth_mode == "Login":
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Login"):
+            if check_password(username, password):
+                st.session_state.authenticated = True
+                st.session_state.username = username
+                st.success("✅ Login successful")
+                st.experimental_rerun()
+            else:
+                st.error("❌ Invalid username or password")
+
+    else:  # Sign Up
+        username = st.text_input("Choose Username")
+        password = st.text_input("Choose Password", type="password")
+        if st.button("Sign Up"):
+            if username and password:
+                signup_user(username, password)
+            else:
+                st.error("❌ Please enter username & password")
+
+# ---------------------------
+# Main App (after login)
+# ---------------------------
+if st.session_state.authenticated:
+    st.title(f"🤖 My AI Assistant — Hello, {st.session_state.username}!")
+
+    # Load API Key
     try:
-        # Try to get API key from Streamlit secrets
-        if 'OPENAI_API_KEY' in st.secrets:
-            api_key = st.secrets['OPENAI_API_KEY']
-        # Fallback to environment variable
-        elif 'OPENAI_API_KEY' in os.environ:
-            api_key = os.environ['OPENAI_API_KEY']
-        else:
-            st.error("OpenAI API key not found. Please configure it in secrets.toml or environment variables.")
-            return None
-        
-        # Initialize OpenAI client
-        client = openai.OpenAI(api_key=api_key)
-        return client
-        
-    except Exception as e:
-        st.error(f"Error initializing OpenAI client: {str(e)}")
-        return None
+        openai.api_key = st.secrets["openai"]["api_key"]
+    except Exception:
+        st.error("⚠️ No API key found in secrets.")
+        st.stop()
 
-# Function to get AI response with error handling
-def get_ai_response(client, messages: List[Dict], model: str = "gpt-3.5-turbo") -> str:
-    """
-    Get response from OpenAI API with comprehensive error handling.
-    
-    Args:
-        client: Initialized OpenAI client
-        messages: List of message dictionaries
-        model: OpenAI model to use
-    
-    Returns:
-        Response content as string or None if error occurs
-    """
-    try:
-        # Create chat completion
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=1000,
-            temperature=0.7
-        )
-        return response.choices[0].message.content
-        
-    except openai.AuthenticationError:
-        st.error("Authentication error: Invalid API key. Please check your API key configuration.")
-        return None
-    except openai.RateLimitError:
-        st.error("Rate limit exceeded. Please try again later.")
-        return None
-    except openai.APIConnectionError:
-        st.error("Network connection error. Please check your internet connection.")
-        return None
-    except openai.APIError as e:
-        st.error(f"OpenAI API error: {str(e)}")
-        return None
-    except Exception as e:
-        st.error(f"Unexpected error: {str(e)}")
-        return None
+    # Initialize Chat
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-# Main chat interface
-def main():
-    # Initialize OpenAI client
-    client = initialize_openai_client()
-    
-    # Chat input
-    if prompt := st.chat_input("What would you like to know?"):
-        # Display user message
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        
-        # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        
-        # Only proceed if client was initialized successfully
-        if client:
-            # Display assistant response
-            with st.chat_message("assistant"):
-                message_placeholder = st.empty()
-                message_placeholder.markdown("Thinking...")
-                
-                # Get AI response
-                full_response = get_ai_response(client, st.session_state.messages)
-                
-                if full_response:
-                    # Clear "Thinking..." message
-                    message_placeholder.empty()
-                    
-                    # Display response
-                    st.markdown(full_response)
-                    
-                    # Add assistant response to chat history
-                    st.session_state.messages.append({"role": "assistant", "content": full_response})
-                else:
-                    message_placeholder.empty()
-                    st.error("Failed to get response from AI assistant. Please try again.")
-        else:
-            st.error("OpenAI client not initialized. Please check your API key configuration.")
+    # Input Area
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        user_input = st.text_input("💬 Type your message:", key="input", placeholder="Ask me anything...")
+    with col2:
+        send = st.button("Send")
 
-# Clear chat history button
-if st.button("Clear Chat History"):
-    st.session_state.messages = []
-    st.rerun()
+    clear = st.button("🗑️ Clear Chat")
+    logout = st.button("🚪 Log Out")
 
-# Run the main function
-if __name__ == "__main__":
-    main()
+    # Actions
+    if clear:
+        st.session_state.messages = []
+        st.experimental_rerun()
+
+    if logout:
+        st.session_state.authenticated = False
+        st.session_state.username = ""
+        st.experimental_rerun()
+
+    if send and user_input.strip():
+        # Save user message
+        st.session_state.messages.append({"role": "user", "content": user_input})
+
+        # AI reply
+        ai_reply = generate_ai_response(st.session_state.messages)
+        if ai_reply:
+            st.session_state.messages.append({"role": "assistant", "content": ai_reply})
+
+        # Reset input
+        st.session_state.input = ""
+
+    # Render chat
+    render_chat()
